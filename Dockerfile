@@ -16,7 +16,7 @@ RUN echo "ls -lah \$@" > /usr/bin/ll && chmod 777 /usr/bin/ll
 RUN addgroup --gid 1000 ${DOCKER_USER} && \
     adduser --uid 1000 --gid 1000 --shell /bin/sh --disabled-password --quiet ${DOCKER_USER}
 
-COPY src /app
+COPY . /app
 
 WORKDIR /app
 
@@ -31,5 +31,4 @@ ENV CELERY_CONCURRENCY=4
 ENV CELERY_TIMEZONE="Europe/Berlin"
 ENV CELERY_BROKER_URL="redis://redis_host:6379"
 
-COPY --chmod=775 run.sh /usr/local/bin/
 CMD ["run.sh"]

@@ -39,10 +39,10 @@ services:
       CELERY_LOGLEVEL: debug
       REDIS_HOST: dawis_redis
       CELERY_BROKER_URL: redis://dawis_redis:6379
+    command: ["run-debug.sh"]
     volumes:
       - ./config:/app/config
       - ./log-debug:/opt/dawis/logs
-      - ./run-debug.sh:/usr/local/bin/run.sh
     networks:
       - dawis
     depends_on:

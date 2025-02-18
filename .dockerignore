@@ -3,6 +3,7 @@
 /*.example.*
 /config/
 /log/
+/log-debug/
 /mongo_data/
 /mysql_data/
 /schedules/

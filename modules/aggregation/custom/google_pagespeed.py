@@ -17,7 +17,15 @@ from typing import Sequence
 import utilities.datetime as datetime_utility
 import dateutil
 import re
+from os import environ
 
+debug_log_file = "/opt/dawis/logs/debug.log"
+debug_log_enabled = environ.get('CELERY_LOGLEVEL') == 'debug'
+def debug_log(message):
+    if debug_log_enabled:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(debug_log_file, 'a') as f:
+            f.write(f'{timestamp} {message}\n')
 
 class _InvalidDataException(Exception):
     def __str__(self):
@@ -36,6 +44,7 @@ class GooglePagespeed:
 
     def __init__(self, configuration: Configuration, configuration_key: str, connection: Connection):
         self.configuration = configuration
+        self.configuration_key = configuration_key
         self.timezone = configuration.databases.timezone
         self.module_configuration = configuration.aggregations.get_custom_configuration_aggregation(configuration_key)
         self.connection = connection
@@ -43,7 +52,7 @@ class GooglePagespeed:
         self.bigquery = None
 
     def run(self):
-        print('Running Google Pagespeed Module:')
+        debug_log(f'Running Google Pagespeed Module {self.configuration_key}:')
         timer_run = time()
         api_key = None
 
@@ -169,7 +178,10 @@ class GooglePagespeed:
             self.mongodb.delete_one(self.COLLECTION_NAME_RETRY, configuration['_id'])
 
         if 'bigquery' == database:
-            self._process_responses_for_bigquery(responses, table_reference)
+            debug_log('Started processing responses for bigquery')
+            bigquery_response = self._process_responses_for_bigquery(responses, table_reference)
+            debug_log(f'bigquery response: {bigquery_response}')
+            debug_log('Finished processing responses for bigquery')
 
             if type(log_table_reference) is TableReference:
                 self._process_log_for_bigquery(log, log_table_reference)
@@ -192,6 +204,7 @@ class GooglePagespeed:
                 thread = ResultThread(self._process_pagespeed_api, request[:4], {'retry_counter': request[4]})
                 thread.start()
                 threads.append(thread)
+                debug_log(f'Sleeping between requests for {self.SECONDS_BETWEEN_REQUESTS} seconds')
                 sleep(self.SECONDS_BETWEEN_REQUESTS)
 
             for thread in threads:
@@ -208,6 +221,8 @@ class GooglePagespeed:
                         if type(match) is re.Match:
                             status_code = int(match.group(1))
 
+                    debug_log(f'Error response with status code {status_code} for {request[1]} {request[0]} {request[2]}: {thread.exception.__str__()}')
+
                     log.append({
                         'url': request[0],
                         'cluster': request[1],
@@ -223,6 +238,7 @@ class GooglePagespeed:
                 else:
                     response = thread.result
                     responses.append(response)
+                    debug_log(f"Response with status code {response['statusCode']} for {request[1]} {request[0]} {request[2]}: {response}")
 
                     log.append({
                         'url': request[0],
@@ -234,6 +250,7 @@ class GooglePagespeed:
                     })
 
             if len(requests_chunks) != requests_chunks.index(requests_chunk) + 1:
+                debug_log(f'Sleeping between request chunks for {GooglePagespeed.SECONDS_BETWEEN_REQUESTS_CHUNKS} seconds')
                 sleep(GooglePagespeed.SECONDS_BETWEEN_REQUESTS_CHUNKS)
 
         return responses, failed_requests, log
@@ -252,6 +269,7 @@ class GooglePagespeed:
             cache_discovery=False
         ).pagespeedapi()
 
+        debug_log(f'Started requesting {cluster} {url} {strategy}')
         request: HttpRequest = pagespeed_api.runpagespeed(url=url, strategy=strategy)
         return self._process_response(request.execute(), url, cluster, strategy)
 
@@ -323,8 +341,9 @@ class GooglePagespeed:
         for data_item in data:
             data_item['date'] = data_item['date'].strftime('%Y-%m-%dT%H:%M:%S.%f')
 
+        debug_log(f'Data to write to bigquery: {data}')
         load_job = self.bigquery.client.load_table_from_json(data, table_reference, job_config=job_config)
-        load_job.result()
+        return load_job.result()
 
     def _process_log_for_bigquery(self, log: Sequence[dict], table_reference: TableReference):
         job_config = LoadJobConfig()
@@ -347,6 +366,7 @@ class GooglePagespeed:
         load_job.result()
 
     def _process_response(self, response: dict, url: str, cluster: str, strategy: str) -> dict:
+        debug_log(f'Finished requesting {cluster} {url} {strategy}')
         lighthouse_audits = response.get('lighthouseResult', {}).get('audits', {})
         lighthouse_categories = response.get('lighthouseResult', {}).get('categories', {})
         network_items = lighthouse_audits.get('network-requests', {}).get('details', {}).get('items', [])
@@ -392,6 +412,7 @@ class GooglePagespeed:
             data['loadingExperience'] = self._loading_experience_data(response, 'loadingExperience')
 
         if not self._validate_response_data(data):
+            debug_log(f'Validation failed for {cluster} {url} {strategy}.')
             raise _InvalidDataException()
 
         return data
